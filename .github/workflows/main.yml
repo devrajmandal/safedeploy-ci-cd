@@ -1,1 +1,70 @@
+name: Test and Build
 
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - '**/*'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+    # Checkout the code
+    - name: Checkout code
+      uses: actions/checkout@v2
+
+    # Docker setup
+    - name: Docker Setup
+      uses: docker/setup-buildx-action@v2
+
+    # Docker login
+    - name: Docker Credentials
+      uses: docker/login-action@v2
+      with:
+        username: ${{ secrets.DOCKER_USERNAME }}
+        password: ${{ secrets.DOCKER_PASSWORD }}
+
+    # Create a unique version tag
+    - name: Docker tag
+      id: version
+      run: |
+        VERSION=v$(date +"%Y%m%d%H%M%S")
+        echo "VERSION=$VERSION" >> $GITHUB_ENV
+
+    # Build Docker image
+    - name: Build Docker Image
+      run: |
+        docker build -t devrajj11/safedeploy-ci-cd:${{ env.VERSION }} .
+
+    # Push Docker image to Docker Hub
+    - name: Push Docker Image
+      run: |
+        docker push devrajj11/safedeploy-ci-cd:${{ env.VERSION }}
+
+    # Update the K8s manifest file
+    - name: Update K8s Manifests
+      run: |
+        echo "Before update:"
+        cat deploy/deployment.yaml
+        sed -i "s|image: devrajj11/safedeploy-ci-cd:.*|image: devrajj11/safedeploy-ci-cd:${{ env.VERSION }}|g" deploy/deployment.yaml
+        echo "After update:"
+        cat deploy/deployment.yaml
+
+    # Commit and push changes if any
+    - name: Commit the changes
+      run: |
+        git config --global user.email "github-actions[bot]@users.noreply.github.com"
+        git config --global user.name "github-actions[bot]"
+
+        git checkout main
+
+        if ! git diff --quiet deploy/deployment.yaml; then
+          git add deploy/deployment.yaml
+          git commit -m "Update deploy.yaml with new image version - ${{ env.VERSION }}"
+          git push origin main
+        else
+          echo "No changes to commit"
+        fi
