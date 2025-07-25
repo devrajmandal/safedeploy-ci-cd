@@ -17,6 +17,6 @@ spec:
     spec:
       containers:
       - name: safedeploy-ci-cd
-        image: devrajj11/safedeploy-ci-cd:v20250725070537
+        image: devrajj11/safedeploy-ci-cd:v20250725130412
         ports:
         - containerPort: 80
