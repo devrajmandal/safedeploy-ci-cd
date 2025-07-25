@@ -88,5 +88,5 @@ jobs:
     - name: Apply Kubernetes Manifests
       run: |
         kubectl apply -f deploy/deployment.yaml
-        kubectl apply -f deploy/service.yaml
+        kubectl apply -f deploy/svc.yaml
         kubectl apply -f deploy/mysealedsecret.yaml
