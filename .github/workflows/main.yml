@@ -1,4 +1,4 @@
-name: Test, Build, Security Scan, and Deploy
+name: CI-CD with Security and Deployment
 
 on:
   push:
@@ -8,96 +8,85 @@ on:
       - '**/*'
 
 jobs:
-  # tfsec scan for Terraform security
-  tfsec-scan:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v3
-
-      - name: Run tfsec scan
-        uses: aquasecurity/tfsec-action@v1.0.3
-        with:
-          working_directory: ./terraform   # Make sure terraform/ exists with a dummy main.tf
-
   build-and-deploy:
     runs-on: ubuntu-latest
-    needs: tfsec-scan  # Wait for tfsec scan before build
+
     steps:
-      # Checkout code
-      - name: Checkout code
-        uses: actions/checkout@v2
+    # Checkout code
+    - name: Checkout code
+      uses: actions/checkout@v3
 
-      # Docker setup
-      - name: Docker Setup
-        uses: docker/setup-buildx-action@v2
+    # tfsec Security Scan for Terraform
+    - name: Run tfsec (Terraform security scan)
+      uses: aquasecurity/tfsec-action@v1
+      with:
+        working-directory: ./terraform
 
-      # Docker login
-      - name: Docker Credentials
-        uses: docker/login-action@v2
-        with:
-          username: ${{ secrets.DOCKER_USERNAME }}
-          password: ${{ secrets.DOCKER_PASSWORD }}
+    # Docker Setup
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v2
 
-      # Create a unique version tag
-      - name: Docker tag
-        id: version
-        run: |
-          VERSION=v$(date +"%Y%m%d%H%M%S")
-          echo "VERSION=$VERSION" >> $GITHUB_ENV
+    # Docker Login
+    - name: Login to Docker Hub
+      uses: docker/login-action@v2
+      with:
+        username: ${{ secrets.DOCKER_USERNAME }}
+        password: ${{ secrets.DOCKER_PASSWORD }}
 
-      # Build Docker image
-      - name: Build Docker Image
-        run: |
-          docker build -t devrajj11/safedeploy-ci-cd:${{ env.VERSION }} .
+    # Generate Version Tag
+    - name: Set Docker Image Tag
+      id: vars
+      run: |
+        VERSION=v$(date +"%Y%m%d%H%M%S")
+        echo "VERSION=$VERSION" >> $GITHUB_ENV
 
-      # Trivy scan the Docker image
-      - name: Scan Docker image with Trivy
-        uses: aquasecurity/trivy-action@master
-        with:
-          image-ref: devrajj11/safedeploy-ci-cd:${{ env.VERSION }}
-          format: 'table'
-          exit-code: '0'  # Don't fail the job even if vulnerabilities exist
+    # Build Docker Image
+    - name: Build Docker Image
+      run: |
+        docker build -t devrajj11/safedeploy-ci-cd:${{ env.VERSION }} .
 
-      # Push Docker image to Docker Hub
-      - name: Push Docker Image
-        run: |
-          docker push devrajj11/safedeploy-ci-cd:${{ env.VERSION }}
+    # Trivy Image Scan
+    - name: Trivy Docker Image Scan
+      uses: aquasecurity/trivy-action@master
+      with:
+        image-ref: devrajj11/safedeploy-ci-cd:${{ env.VERSION }}
+        format: table
+        exit-code: '0'
 
-      # Update the K8s manifest file
-      - name: Update K8s Manifests
-        run: |
-          echo "Before update:"
-          cat deploy/deployment.yaml
-          sed -i "s|image: devrajj11/safedeploy-ci-cd:.*|image: devrajj11/safedeploy-ci-cd:${{ env.VERSION }}|g" deploy/deployment.yaml
-          echo "After update:"
-          cat deploy/deployment.yaml
+    # Push Docker Image
+    - name: Push Docker Image
+      run: |
+        docker push devrajj11/safedeploy-ci-cd:${{ env.VERSION }}
 
-      # Commit and push changes if any
-      - name: Commit the changes
-        run: |
-          git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          git config --global user.name "github-actions[bot]"
+    # Update K8s Deployment Manifest
+    - name: Update deployment image
+      run: |
+        sed -i "s|image: devrajj11/safedeploy-ci-cd:.*|image: devrajj11/safedeploy-ci-cd:${{ env.VERSION }}|g" deploy/deployment.yaml
 
-          git checkout main
+    # Commit changes back to GitHub
+    - name: Commit and Push Changes
+      run: |
+        git config --global user.email "github-actions[bot]@users.noreply.github.com"
+        git config --global user.name "github-actions[bot]"
+        git add deploy/deployment.yaml
+        git commit -m "Updated image to ${{ env.VERSION }}"
+        git push origin main || echo "No changes to commit"
 
-          if ! git diff --quiet deploy/deployment.yaml; then
-            git add deploy/deployment.yaml
-            git commit -m "Update deploy.yaml with new image version - ${{ env.VERSION }}"
-            git push origin main
-          else
-            echo "No changes to commit"
-          fi
+    # Configure AWS Credentials
+    - name: Configure AWS Credentials
+      uses: aws-actions/configure-aws-credentials@v2
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ap-south-1
 
-      - name: Configure kubectl for EKS
-        run: |
-          aws eks --region ap-south-1 update-kubeconfig --name testing-cluster
+    # Update kubeconfig for EKS
+    - name: Update kubeconfig
+      run: aws eks --region ap-south-1 update-kubeconfig --name testing-cluster
 
-      - name: Deploy to Kubernetes
-        run: |
-          kubectl apply -f deploy/deployment.yaml
-          kubectl apply -f deploy/svc.yaml
-
-      - name: Apply SealedSecrets
-        run: |
-          kubectl apply -f deploy/mysealedsecret.yaml
+    # Deploy to EKS
+    - name: Apply Kubernetes Manifests
+      run: |
+        kubectl apply -f deploy/deployment.yaml
+        kubectl apply -f deploy/service.yaml
+        kubectl apply -f deploy/mysealedsecret.yaml
